@@ -1,0 +1,4 @@
+(executable
+ (public_name lambda-c)
+ (name main)
+ (libraries lib))
