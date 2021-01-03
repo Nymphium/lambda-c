@@ -1,33 +1,5 @@
 open Syntax
 
-module Value = struct
-  type t =
-    | Nil
-    | Int of int
-    | Fun of string * Term.t
-    | Var of string
-    | Label of string
-  [@@deriving show { with_path = false }]
-
-  let to_term = function
-    | Nil -> Term.Nil
-    | Int v -> Term.Int v
-    | Fun (x, e) -> Term.Fun (x, e)
-    | Var x -> Term.Var x
-    | Label l -> Term.Label l
-  ;;
-
-  let from_term = function
-    | Term.Nil -> Nil
-    | Term.Int i -> Int i
-    | Term.Fun (x, e) -> Fun (x, e)
-    | Term.Var x -> Var x
-    | Term.Label l -> Label l
-    | other ->
-      failwith (Printf.sprintf "%s cannot be converted into value" @@ Term.show other)
-  ;;
-end
-
 (**
   * environment θ for variables and labels
   * each variables / labels is unique and global
@@ -36,7 +8,7 @@ module Store = struct
   open struct
     module M = Map.Make ((String : Map.OrderedType))
 
-    let s : Value.t M.t ref = ref M.empty
+    let s : t M.t ref = ref M.empty
   end
 
   (** θ(x) *)
@@ -45,13 +17,11 @@ module Store = struct
   (** θ[x <- v] *)
   let set x v = s := M.add x v !s
 
-  let flush x = s := M.add x Value.Nil !s
+  let flush x = s := M.add x Nil !s
   let reflesh () = s := M.empty
 end
 
 include struct
-  open Term
-
   open struct
     let gensym = Utils.gengensym "r"
     let genlabel = Utils.gengensym "l"
@@ -94,7 +64,6 @@ include struct
   end
 
   let binop token a b =
-    let open Term in
     match a, b with
     | Int a, Int b -> Int (token_to_arith token a b)
     | other, other' ->
@@ -108,33 +77,31 @@ include struct
 
   let rec eval1 = function
     | (Int _ | Fun _ | Nil) as i -> i
-    | Var x | Label x -> Store.get x |> Value.to_term
+    | Var x | Label x -> Store.get x
     | App (Fun (x, body), e) ->
-      let () = Store.set x (Value.from_term e) in
+      let () = Store.set x e in
       body
     (* binary-operation form: l token r = ((token l) r) *)
     | App (App (PrimOp token, l), r) -> binop token l r
     | Let (x, bnd, body) ->
-      let () = Store.set x (Value.from_term bnd) in
+      let () = Store.set x bnd in
       body
     | Create f ->
       let l = genlabel () in
-      let () = Store.set l @@ Value.from_term f in
+      let () = Store.set l @@ f in
       Label l
-    | Resume (l, e) ->
-      (match Value.from_term l with
-      | Value.Label l ->
-        let f = Store.get l |> Value.to_term in
-        let () = Store.flush l in
-        Builder.(labelE l (f <@> e))
-      | _ -> failwith @@ Printf.sprintf "%s is not a label" @@ show l)
+    | Resume (Label l, e) ->
+      let f = Store.get l in
+      let () = Store.flush l in
+      Builder.(labelE l (f <@> e))
+    | Resume (l, _) -> failwith @@ Printf.sprintf "%s is not a label" @@ show l
     | LabelE (l, e) ->
       (* C[l:e] ~~> C[l:C'[e']] *)
       let e', c = punch e in
       (match e' with
       | Yield v (* v can be a value *) ->
         let x = gensym () in
-        let () = Store.set l @@ Value.Fun (x, c @@ Builder.var x) in
+        let () = Store.set l @@ Fun (x, c @@ Builder.var x) in
         v
       | v when is_value v -> v
       | other -> LabelE (l, c @@ eval1 other))
@@ -145,7 +112,7 @@ include struct
 
   let rec eval t =
     if is_value t
-    then t |> Value.from_term
+    then t
     else (
       let t', ctx = punch t in
       eval1 t' |> ctx |> eval)
